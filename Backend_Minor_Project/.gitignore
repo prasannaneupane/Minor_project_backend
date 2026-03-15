@@ -1,0 +1,4 @@
+# Ignore large model files
+resnet50_backend/best_model.pth
+segformer_backend/best.ckpt
+venv/
