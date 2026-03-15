@@ -2,3 +2,6 @@
 resnet50_backend/best_model.pth
 segformer_backend/best.ckpt
 venv/
+
+# Ignore macOS .DS_Store files
+.DS_Store
