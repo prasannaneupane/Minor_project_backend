@@ -17,6 +17,14 @@ import numpy as np
 import base64
 import requests
 from urllib.parse import urlparse
+from groq import Groq
+from dotenv import load_dotenv
+
+# Load .env file
+load_dotenv()
+
+# Configure Groq
+groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 # ==================== CONFIGURATION ====================
 BASE_DIR = Path(__file__).parent.absolute()
@@ -35,7 +43,7 @@ app = FastAPI(
 # Enable CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3001", "http://localhost:5000", "http://localhost:3000", "*"],
+    allow_origins=["http://localhost:3001", "http://localhost:5000", "*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -276,6 +284,32 @@ class SmartPreprocessor:
 
 # Initialize smart preprocessor
 smart_preprocessor = SmartPreprocessor()
+# ==================== GROQ REMEDY FUNCTION ====================
+def get_remedy(disease_name: str) -> str:
+    try:
+        clean_name = disease_name.replace("___", " ").replace("_", " ").title()
+        
+        prompt = f"""
+        A crop has been diagnosed with: {clean_name}
+
+        Please provide:
+        1. Brief description of this disease (1-2 sentences)
+        2. Immediate remedies (both organic and chemical options)
+        3. Prevention tips for the future
+
+        Keep it concise and practical for a farmer. Use simple language.
+        Use plain text only.
+        """
+        response = groq_client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=500
+        )
+        return response.choices[0].message.content
+
+    except Exception as e:
+        print(f"❌ GROQ ERROR: {str(e)}")
+        return f"Remedy unavailable. Please consult a local agricultural expert."
 
 # ==================== MODEL ARCHITECTURE ====================
 def create_model(num_classes):
@@ -510,14 +544,19 @@ async def predict_upload(
                 "confidence_percentage": round(float(result['top_probs'][i]) * 100, 2)
             })
         
+       # Get remedy for top predicted disease
+        top_disease = predictions[0]["class"]
+        remedy = get_remedy(top_disease)
+
         return JSONResponse({
             "success": True,
             "filename": file.filename,
             "preprocessing_applied": result['preprocessing_applied'],
             "inference_time_ms": round(result['inference_time'], 2),
-            "predictions": predictions
+            "predictions": predictions,
+            "diagnosed_disease": predictions[0]["display_name"],
+            "remedy": remedy
         })
-        
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -555,12 +594,18 @@ async def predict_url(url: str):
                 "confidence_percentage": round(float(result['top_probs'][i]) * 100, 2)
             })
         
+       # Get remedy for top prediction
+        top_disease = predictions[0]["class"]
+        remedy = get_remedy(top_disease)
+
         return JSONResponse({
             "success": True,
-            "url": url,
+            "filename": file.filename,
             "preprocessing_applied": result['preprocessing_applied'],
             "inference_time_ms": round(result['inference_time'], 2),
-            "predictions": predictions
+            "predictions": predictions,
+            "remedy": remedy,                          # ← NEW
+            "diagnosed_disease": predictions[0]["display_name"]  # ← NEW
         })
         
     except Exception as e:
