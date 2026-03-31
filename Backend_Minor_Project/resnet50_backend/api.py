@@ -392,14 +392,14 @@ async def predict_image(image: Image.Image, use_preprocessing: bool = None):
     Unified prediction function
     """
     global model
-    
+
     # Decide whether to preprocess
     if use_preprocessing is None:
         # Auto-detect
         needs_it, reason = smart_preprocessor.needs_preprocessing(image)
         print(f"🤔 Auto-detection: {reason}")
         use_preprocessing = needs_it
-    
+
     # Apply preprocessing if needed
     if use_preprocessing:
         print("🔄 Applying full preprocessing")
@@ -407,26 +407,37 @@ async def predict_image(image: Image.Image, use_preprocessing: bool = None):
     else:
         print("✓ Using standard transform (no preprocessing)")
         processed_img = image
-    
+
+    # Check if preprocessing resulted in a valid leaf
+    if processed_img is None:
+        print("❌ No valid leaf detected. Returning confidence score of 0.")
+        return {
+            "probabilities": None,
+            "top_probs": [0.0],
+            "top_indices": [-1],
+            "inference_time": 0.0,
+            "preprocessing_applied": use_preprocessing
+        }
+
     # Apply standard transform
     input_tensor = standard_transform(processed_img).unsqueeze(0).to(device)
-    
+
     # Predict
     start_time = time.time()
     with torch.no_grad():
         outputs = model(input_tensor)
         probabilities = torch.nn.functional.softmax(outputs[0], dim=0)
-    
+
     inference_time = (time.time() - start_time) * 1000
-    
+
     # Get top predictions
     top_probs, top_indices = torch.topk(probabilities, 3)
-    
+
     return {
         "probabilities": probabilities,
         "top_probs": top_probs,
         "top_indices": top_indices,
-        "inference_time": inference_time,
+        "inference_time": round(inference_time, 2),
         "preprocessing_applied": use_preprocessing
     }
 
@@ -548,14 +559,17 @@ async def predict_upload(
         top_disease = predictions[0]["class"]
         remedy = get_remedy(top_disease)
 
+        # Ensure file.filename is passed correctly
+        filename = file.filename if file else "unknown"
+
         return JSONResponse({
             "success": True,
-            "filename": file.filename,
+            "filename": filename,
             "preprocessing_applied": result['preprocessing_applied'],
             "inference_time_ms": round(result['inference_time'], 2),
             "predictions": predictions,
-            "diagnosed_disease": predictions[0]["display_name"],
-            "remedy": remedy
+            "diagnosed_disease": predictions[0]["display_name"] if predictions else "None",
+            "remedy": remedy if predictions else "No remedy available"
         })
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

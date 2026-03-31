@@ -9,30 +9,21 @@ import albumentations as A
 
 from transformers import SegformerImageProcessor, SegformerForSemanticSegmentation
 from torchmetrics.classification import MulticlassAccuracy, MulticlassJaccardIndex
-from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping, LearningRateMonitor
+from pytorch_lightning.callbacks import (
+    ModelCheckpoint,
+    EarlyStopping,
+    LearningRateMonitor,
+)
 import cv2
 import matplotlib.pyplot as plt
-
 
 import os
 
 from torch.utils.data import Dataset
-import cv2
-
-import matplotlib.pyplot as plt
-import torch.nn.functional as F
-
 
 
 class PlantDataset(Dataset):
-    def __init__(
-        self,
-        img_dir,
-        mask_dir,
-        processor,
-        augment=None,
-        img_size=512
-    ):
+    def __init__(self, img_dir, mask_dir, processor, augment=None, img_size=512):
         self.img_dir = img_dir
         self.mask_dir = mask_dir
         self.processor = processor
@@ -51,7 +42,7 @@ class PlantDataset(Dataset):
         common = sorted(set(img_stems.keys()) & set(mask_stems.keys()))
 
         self.images = [img_stems[k] for k in common]
-        self.masks  = [mask_stems[k] for k in common]
+        self.masks = [mask_stems[k] for k in common]
 
         # ---------------------------
         # Helpful dataset report
@@ -90,7 +81,7 @@ class PlantDataset(Dataset):
         mask = cv2.resize(
             mask,
             (self.img_size, self.img_size),
-            interpolation=cv2.INTER_NEAREST  # preserves labels
+            interpolation=cv2.INTER_NEAREST,  # preserves labels
         )
 
         # Binary mask (0 / 1)
@@ -108,9 +99,7 @@ class PlantDataset(Dataset):
         # SegFormer processor
         # ---------------------------
         encoded = self.processor(
-            images=img,
-            segmentation_maps=mask,
-            return_tensors="pt"
+            images=img, segmentation_maps=mask, return_tensors="pt"
         )
 
         encoded = {k: v.squeeze(0) for k, v in encoded.items()}
@@ -118,7 +107,6 @@ class PlantDataset(Dataset):
 
         return encoded
     
-
 class DiceLoss(nn.Module):
     def __init__(self, smooth=1):
         super().__init__()
@@ -127,20 +115,19 @@ class DiceLoss(nn.Module):
     def forward(self, logits, targets):
         probs = torch.softmax(logits, dim=1)
 
-        targets_one_hot = torch.nn.functional.one_hot(
-            targets,
-            num_classes=probs.shape[1]
-        ).permute(0, 3, 1, 2).float()
+        targets_one_hot = (
+            torch.nn.functional.one_hot(targets, num_classes=probs.shape[1])
+            .permute(0, 3, 1, 2)
+            .float()
+        )
 
         intersection = (probs * targets_one_hot).sum(dim=(2, 3))
         union = probs.sum(dim=(2, 3)) + targets_one_hot.sum(dim=(2, 3))
 
         dice = (2 * intersection + self.smooth) / (union + self.smooth)
         return 1 - dice.mean()
-
-
+    
 class SegformerLightning(pl.LightningModule):
-
     def __init__(self, num_classes=2, lr=1e-5, freeze_epochs=3):
 
         super().__init__()
@@ -149,7 +136,7 @@ class SegformerLightning(pl.LightningModule):
         self.model = SegformerForSemanticSegmentation.from_pretrained(
             "nvidia/segformer-b1-finetuned-ade-512-512",
             num_labels=num_classes,
-            ignore_mismatched_sizes=True
+            ignore_mismatched_sizes=True,
         )
 
         # ===============================
@@ -160,10 +147,7 @@ class SegformerLightning(pl.LightningModule):
         # ===============================
         # UPDATED: CE loss with ignore index
         # ===============================
-        self.ce = nn.CrossEntropyLoss(
-            label_smoothing=0.05,
-            ignore_index=255
-        )
+        self.ce = nn.CrossEntropyLoss(label_smoothing=0.05, ignore_index=255)
 
         # ===============================
         # NEW: Dice loss
@@ -275,7 +259,7 @@ class SegformerLightning(pl.LightningModule):
         self.test_iou.reset()
         self.test_acc.reset()
 
-    # ---------------- UNFREEZE BACKBONE ---------------- 
+    # ---------------- UNFREEZE BACKBONE ----------------
     def on_train_epoch_start(self):
         if self.current_epoch == self.freeze_epochs:
             print("Unfreezing encoder...")
@@ -286,29 +270,27 @@ class SegformerLightning(pl.LightningModule):
     def configure_optimizers(self):
 
         optimizer = torch.optim.AdamW(
-            self.parameters(),
-            lr=self.hparams.lr,
-            weight_decay=1e-3
+            self.parameters(), lr=self.hparams.lr, weight_decay=1e-3
         )
 
         # updated scheduler scale
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer,
-            T_max=self.trainer.max_epochs
+            optimizer, T_max=self.trainer.max_epochs
         )
 
         return [optimizer], [scheduler]
     
-
-    
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+import torch
+import torch.nn.functional as F
+from transformers import SegformerImageProcessor
 
 # ---------------- LOAD MODEL ----------------
-# Updated checkpoint path
-checkpoint_path = "segformer_backend/best.ckpt"
-if not os.path.exists(checkpoint_path):
-    raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}")
-
-model = SegformerLightning.load_from_checkpoint(checkpoint_path)
+model = SegformerLightning.load_from_checkpoint(
+    "/mnt/Data/Plant_Disease_Detection/Split(0.7,0.2,0.1), LR (1e-5), WD(1e-3) 20 epoc NL/best.ckpt"
+)
 
 model.eval()
 
@@ -317,18 +299,18 @@ model = model.to(device)
 
 # ---------------- LOAD PROCESSOR ----------------
 processor = SegformerImageProcessor.from_pretrained(
-"nvidia/segformer-b1-finetuned-ade-512-512"
+    "nvidia/segformer-b1-finetuned-ade-512-512"
 )
 
+# ---------------- DISPLAY AND OVERLAY ----------------
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+import torch
+import torch.nn.functional as F
+
 # ---------------- LOAD IMAGE ----------------
-# Updated image path
-image_path = "/Users/prasanna/Documents/Screenshots/Screenshot 2026-03-15 at 5.58.21 pm.png"
-
-# Ensure the file exists
-if not os.path.exists(image_path):
-    raise FileNotFoundError(f"Image file not found: {image_path}")
-
-# Load the image
+image_path = "/mnt/Data/Plant_Disease_Detection/apple_black_rot_google_0221.jpg"
 image = cv2.imread(image_path)
 image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
@@ -338,85 +320,33 @@ pixel_values = inputs["pixel_values"].to(device)
 
 # ---------------- MODEL PREDICTION ----------------
 with torch.no_grad():
-
     outputs = model(pixel_values=pixel_values)
     logits = outputs.logits
-
     logits = F.interpolate(
         logits,
         size=image_rgb.shape[:2],
         mode="bilinear",
         align_corners=False
     )
+    preds = torch.argmax(logits, dim=1).cpu().numpy()[0]  # H x W, 0=healthy, 1=disease
 
-    preds = torch.argmax(logits, dim=1).cpu().numpy()[0]
+# ---------------- CREATE BINARY MASK ----------------
+mask = (preds == 1).astype(np.uint8)
 
-# ---------------- CREATE DISEASE MASK ----------------
-disease_mask = (preds == 1).astype(np.uint8)
+# ---------------- COLORED MASK ----------------
+disease_mask_colored = np.zeros_like(image_rgb)
+disease_mask_colored[preds == 1] = [255, 0, 0]  # Red color for disease
 
-# ---------------- MORPHOLOGICAL CLEANING ----------------
-kernel = np.ones((5,5), np.uint8)
-
-opening = cv2.morphologyEx(
-    disease_mask,
-    cv2.MORPH_OPEN,
-    kernel,
-    iterations=2
-)
-
-# ---------------- DISTANCE TRANSFORM ----------------
-dist_transform = cv2.distanceTransform(opening, cv2.DIST_L2, 5)
-
-# ---------------- FIND SURE FOREGROUND ----------------
-ret, sure_fg = cv2.threshold(
-    dist_transform,
-    0.4 * dist_transform.max(),
-    1,
-    0
-)
-
-sure_fg = np.uint8(sure_fg)
-
-# ---------------- FIND SURE BACKGROUND ----------------
-sure_bg = cv2.dilate(opening, kernel, iterations=3)
-
-# ---------------- UNKNOWN REGION ----------------
-unknown = cv2.subtract(sure_bg, sure_fg)
-
-# ---------------- MARKERS ----------------
-num_markers, markers = cv2.connectedComponents(sure_fg)
-
-markers = markers + 1
-markers[unknown == 1] = 0
-
-# ---------------- APPLY WATERSHED ----------------
-image_for_ws = image_rgb.copy()
-markers = cv2.watershed(image_for_ws, markers)
-
-# ---------------- COLOR DISEASE REGIONS ----------------
-colored_output = image_rgb.copy()
-
+# ---------------- OVERLAY ----------------
+alpha = 0.5
+# Pixel-wise overlay
 overlay = image_rgb.copy()
+overlay[preds == 1] = (
+    (1 - alpha) * image_rgb[preds == 1] + alpha * disease_mask_colored[preds == 1]
+).astype(np.uint8)
 
-for label in np.unique(markers):
-
-    if label <= 1:
-        continue
-
-    mask = (markers == label).astype(np.uint8)
-
-    if np.sum(mask) < 40:
-        continue
-
-    # color lesion region (red)
-    overlay[mask == 1] = [255, 0, 0]
-
-# blend overlay with original image
-alpha = 0.45
-colored_output = cv2.addWeighted(overlay, alpha, image_rgb, 1 - alpha, 0)
-
-# ---------------- DISPLAY RESULTS ----------------
-plt.figure(figsize=(14,6))
+# ---------------- DISPLAY ----------------
+plt.figure(figsize=(15,5))
 
 plt.subplot(1,3,1)
 plt.title("Original Image")
@@ -425,16 +355,15 @@ plt.axis("off")
 
 plt.subplot(1,3,2)
 plt.title("Segmentation Mask")
-plt.imshow(disease_mask, cmap="gray")
+plt.imshow(mask, cmap="gray")
 plt.axis("off")
 
 plt.subplot(1,3,3)
-plt.title("Separated Disease Regions")
-plt.imshow(colored_output)
+plt.title("Overlay - Disease Highlighted")
+plt.imshow(overlay)
+plt.axis("off")
 
 plt.show()
-
-
 
 # ---------------- CALCULATE SEVERITY ----------------
 def get_leaf_mask(image):
@@ -449,19 +378,15 @@ def calculate_severity(leaf_mask, disease_mask):
     """Compute severity %"""
     leaf_pixels = np.sum(leaf_mask > 0)
     disease_pixels = np.sum(disease_mask == 1)
-    
-    # avoid division by zero
     if leaf_pixels == 0:
         return 0.0
-    
     severity = (disease_pixels / leaf_pixels) * 100
-    severity = min(severity, 100.0)  # clamp to 100%
-    return severity
+    return min(severity, 100.0)  # clamp to 100%
 
-# leaf mask
+# Leaf mask
 leaf_mask = get_leaf_mask(image)
 
-# disease mask from model
+# Disease mask from model
 disease_mask = preds
 
 severity = calculate_severity(leaf_mask, disease_mask)
